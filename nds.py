@@ -172,10 +172,16 @@ class UKF:
         w[0] += 1 - self.alpha**2 + self.beta
         return w
 
-    def __init__(self, F, H, R_v, R_n, x_hat_0, P_0, alpha=1):
+    def __init__(self, F, H, R_v, R_n, x_hat_0, P_0, alpha=1.611):
         """
         x_hat_0 and P_0 are initial estimates of the state mean and covariance.
-        alpha determines the spread of sigma points, and should be small...
+
+
+        alpha determines the spread of sigma points, and should be ~1e-3 or so
+         However: currently, small alpha (1.61 or less) makes the
+                  covariance estimate explode, and it is not clear how to fix
+                  this. There is a square-root implementation belo that should
+                  not suffer this kind of problem, but it has bugs.
         """
         self.F = F
         self.H = H
@@ -210,6 +216,7 @@ class UKF:
 
     def time_update(self, u):
         sigma_points = self.sigma_points(self.x_hat, self.P)
+        #print("points", np.linalg.norm(sigma_points), np.linalg.norm(self.P))
 
         sigma_star = np.zeros((2*self.L + 1, self.L))
         for i in range(2*self.L + 1):
@@ -220,10 +227,12 @@ class UKF:
             x_hat_bar += self.weights_m[i] * sigma_star[i]
 
         P_bar = np.array(self.R_v)
+        #print(np.linalg.norm(P_bar), np.linalg.norm(sigma_star))
         for i in range(2*self.L + 1):
             P_bar += self.weights_c[i] * np.outer(
                 sigma_star[i] - x_hat_bar,
                 sigma_star[i] - x_hat_bar)
+            #print(np.linalg.norm(P_bar))
 
         sigma_points = self.sigma_points(x_hat_bar, P_bar)
         
@@ -337,18 +346,12 @@ class UKF_sqrt:
         for i in range(1, 2*self.L + 1):
             S_bar[i] -= x_hat_bar
         S_bar *= np.sqrt(self.weights_c[1])
-        print(S_bar.shape, self.sqrt_R_v.shape)
+        #print(S_bar.shape, self.sqrt_R_v.shape)
         S_bar = np.c_[S_bar.T, self.sqrt_R_v]
         q, r = np.linalg.qr(S_bar)
         S_bar = r + np.sqrt(self.weights_c[0]) * np.outer(
             sigma_star[0] - x_hat_bar,
             sigma_star[0] - x_hat_bar)
-
-        # P_bar = np.array(self.R_v)
-        # for i in range(2*self.L + 1):
-        #     P_bar += self.weights_c[i] * np.outer(
-        #         sigma_star[i] - x_hat_bar,
-        #         sigma_star[i] - x_hat_bar)
 
         sigma_points = self.sigma_points(x_hat_bar, S_bar)
         
@@ -375,12 +378,6 @@ class UKF_sqrt:
         S_y = r + np.sqrt(self.weights_c[0]) * np.outer(
             Y[0] - y_hat_bar,
             Y[0] - y_hat_bar)
-
-        # P_yy = np.array(self.R_n)
-        # for i in range(2*self.L):
-        #     P_yy += self.weights_c[i] * np.outer(
-        #         Y[i] - y_hat_bar,
-        #         Y[i] - y_hat_bar)
 
         P_xy = np.zeros((self.L, self.M))
         for i in range(2*self.L+1):
