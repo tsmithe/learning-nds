@@ -18,11 +18,13 @@ def u(k, dim=2):
     """
     return np.zeros(dim)
 
+
 def F(x, u):
     x_ = np.zeros(2)
     x_[0] = x[0]**2 - x[1]**2 + 0.9*x[0] - 0.6013*x[1]
     x_[1] = 2*x[0]*x[1] + 2*x[0] + 0.5*x[1]
     return x_
+
 
 def dF_dx(x, u):
     dF0_dx0 = 2*x[0] + 0.9
@@ -32,8 +34,10 @@ def dF_dx(x, u):
     return np.array([[dF0_dx0, dF0_dx1],
                      [dF1_dx0, dF1_dx1]])
     
+
 def H(x):
     return x
+
 
 def dH_dx(x):
     return np.eye(2)
