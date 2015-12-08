@@ -142,7 +142,7 @@ class EKF:
         return x_hat_bar
 
     def measurement_update(self, y, x_hat_bar):
-        P_bar = P_bar
+        P_bar = self.P_bar
         A = self.A
         C = self.dH_dx(x_hat_bar)
         K = P_bar.dot(C.T).dot(np.linalg.inv(C.dot(P_bar).dot(C.T) + self.R_n))
@@ -160,17 +160,26 @@ class UKF:
     where v, n are Gaussian noise processes with mean 0
      and covariances R_v, R_n.    
     """
+    # def weights_m(self):
+    #     w = np.zeros(2*self.L + 1)
+    #     w[0] = self.Lambda / (self.L + self.Lambda)
+    #     for i in range(1, 2*self.L + 1):
+    #         w[i] = 1 / (2*(self.L + self.Lambda))
+    #     return w
+
+    # def weights_c(self):
+    #     w = self.weights_m #()
+    #     w[0] += 1 - self.alpha**2 + self.beta
+    #     return w
+
     def weights_m(self):
-        w = np.zeros(2*self.L + 1)
-        w[0] = self.Lambda / (self.L + self.Lambda)
-        for i in range(1, 2*self.L + 1):
-            w[i] = 1 / (2*(self.L + self.Lambda))
+        w = np.ones(2*self.L + 1)
+        w[0] = 0.5
+        w[1:] = (1 - w[0]) / (2*self.L)
         return w
 
     def weights_c(self):
-        w = self.weights_m #()
-        w[0] += 1 - self.alpha**2 + self.beta
-        return w
+        return self.weights_m
 
     def __init__(self, F, H, R_v, R_n, x_hat_0, P_0, alpha=1.611):
         """
@@ -200,12 +209,13 @@ class UKF:
         # NB: these don't change while we don't augment the sigma points
         self.weights_m = self.weights_m()
         self.weights_c = self.weights_c()
+        print(np.sum(self.weights_m))
 
     def sigma_points(self, x, P):
         # nb: better to *augment* the sigma points at each k, not recompute
         #     but this should work fine
         sqrt = np.linalg.cholesky(P)
-        sqrt *= np.sqrt(self.L + self.Lambda)
+        sqrt *= np.sqrt(self.L / (1-self.weights_m[0])) #np.sqrt(self.L + self.Lambda)
         sigma_points = np.zeros((2*self.L + 1, self.L))
         sigma_points[0, :] = x
         for i in range(1, self.L+1):
@@ -268,9 +278,9 @@ class UKF:
         P = P_bar - K.dot(P_yy).dot(K.T)
 
         self.x_hat = x_hat
-        self.P = P
+        self.P = P/2 + P.T/2 + np.eye(self.P.shape[0]) * 0.001
 
-        return x_hat, P
+        return x_hat, self.P
 
 
 class UKF_sqrt:
