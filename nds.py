@@ -119,6 +119,11 @@ class EKF:
      and covariances R_v, R_n.    
     """
     def __init__(self, F, dF_dx, H, dH_dx, R_v, R_n, x_hat_0, P_0): 
+        """
+        x_hat_0 and P_0 are initial estimates of the state mean and covariance.
+
+        dF_dx and dH_dx are the Jacobians of F and H with respect to x.
+        """
         self.F = F
         self.dF_dx = dF_dx
         self.H = H
