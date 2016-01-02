@@ -1,12 +1,69 @@
 #!/usr/bin/env python3
 
+from __future__ import division
+
 import numpy as np
 import matplotlib.pyplot as plt
 
-# RBF class not implemented yet...
-#
-# class RBF:
-#     def __init__(self, means, covariances, A, B, b, Q):
+class RBF:
+    def __init__(self, means, covariances):
+        """
+        self.c[i]
+        self.S_det[i]
+        self.S_inv[i]
+        self.size
+        self.I
+
+        And guesses for:
+        self.A, self.B, self.b, self.h[i]
+        """
+
+    def rho(self, i, x):
+        return np.sqrt(2*np.pi) * pow(self.S_det[i], -len(x)/2) * np.exp(
+            -0.5 * (x - self.c[i]).T.dot(self.S_inv[i]).dot(x - self.c[i]))
+
+    def __call__(self, x, u):
+        z = np.zeros(self.size)
+        for i in range(self.I):
+            z += self.h[i] * self.rho(i, x)
+        z += self.A.dot(x) + self.B.dot(u) + self.b
+        return z
+
+    def update(self, u_data, x_mean_data, z_mean_data, x_z_covar_data):
+        """
+        u_data is a data matrix for u (rows are the different j);
+        x_mean_data is the corresponding data matrix for the means of x;
+        z_mean_data the same for the means of z; and
+        x_z_covar_data is a list of corresponding covariance matrices for (x,z),
+          such that the upper-left blocks are the x covariances, and
+          the lower-right blocks are the z covariances.
+        """
+        J = len(u_data)
+        u_size = len(u_data[0])
+        x_size = len(x_mean_data[0])
+        z_size = len(z_mean_data[0])
+
+        sum_u = np.sum(u_data, 0)
+        sum_mean_x = np.sum(x_mean_data, 0)
+        sum_mean_z = np.sum(z_mean_data, 0)
+
+        sum_mean_x_xT = np.zeros((x_size, x_size))
+        for j in range(J):
+            sum_mean_x_xT += (np.outer(x_mean_data[j], x_mean_data[j]) + 
+                              x_z_covar_data[:x_size, :x_size])
+
+        sum_u_uT = np.zeros((u_size, u_size))
+        for j in range(J):
+            sum_u_uT += np.outer(u_data[j], u_data[j])
+
+        sum_mean_x_zT = np.zeros((x_size, z_size))
+        for j in range(J):
+            sum_mean_x_zT += (np.outer(x_mean_data[j], z_mean_data[j]) + 
+                              x_z_covar_data[:x_size, x_size:])
+
+        sum_mean_u_zT = np.zeros((u_size, z_size))
+        for j in range(J):
+            sum_mean_u_zT += np.outer(u_data[j], z_mean_data[j])
 
 
 ###
@@ -35,12 +92,22 @@ def dF_dx(x, u):
                      [dF1_dx0, dF1_dx1]])
     
 
+def H_complicated(x):
+    """
+    UKF also works well with a complicated output function!
+    """
+    _ = x**2
+    _[0] += np.sin(2*x[1]*x[0])
+    _[1] += -3*x[0]**3 + np.log(np.abs(x[0]))
+    return _
+
+
 def H(x):
     return x
 
 
 def dH_dx(x):
-    return np.eye(2)
+    return np.eye(len(x))
 
 
 ###
@@ -48,7 +115,7 @@ def dH_dx(x):
 ### and plot the results
 ###
 
-def generate_timeseries(stop=10000, x0=np.array([-0.72, -0.64]),
+def generate_timeseries(F=F, H=H, stop=10000, x0=np.array([-0.72, -0.64]),
                         R_v=np.eye(2)*0, R_n=np.eye(2)*0.001):
     """
     stop is the number of iterations;
@@ -104,6 +171,14 @@ def plot_states(F, U, X_hat, x0=np.array([-0.72, -0.64])):
     ax.set_ylim(-2, 1)
 
     return fig, ax
+
+
+def test_filter(F, H, dF_dx, dH_dx, x0=np.array([-0.72, -0.64])):
+    U, Y, R_v, R_n = generate_timeseries(F, H)
+    filt = UKF(F, H, R_v, R_n, x0, np.eye(2)*0.0001)
+    X = train_filter(filt, U, Y)
+    plot_states(F, U, X)
+    plt.show()
 
 
 ###
