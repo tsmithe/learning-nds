@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 class RBF:
-    def __init__(self, means, covariances):
+    def __init__(self, u_size, x_size, z_size, I=10): #, means, covariances):
         """
         self.c[i]
         self.S_det[i]
@@ -17,8 +17,17 @@ class RBF:
         And guesses for:
         self.A, self.B, self.b, self.h[i]
         """
+        self.I = I
+        self.size = z_size
+
+        self.h = np.zeros(I)
+
+        self.A = np.zeros((z_size, x_size))
+        self.B = np.zeros((z_size, u_size))
+        self.b = np.zeros(z_size)
 
     def rho(self, i, x):
+        return 0
         return np.sqrt(2*np.pi) * pow(self.S_det[i], -len(x)/2) * np.exp(
             -0.5 * (x - self.c[i]).T.dot(self.S_inv[i]).dot(x - self.c[i]))
 
@@ -39,31 +48,74 @@ class RBF:
           the lower-right blocks are the z covariances.
         """
         J = len(u_data)
+
         u_size = len(u_data[0])
         x_size = len(x_mean_data[0])
         z_size = len(z_mean_data[0])
+        size_max = max(max(u_size, x_size), z_size)
 
-        sum_u = np.sum(u_data, 0)
-        sum_mean_x = np.sum(x_mean_data, 0)
-        sum_mean_z = np.sum(z_mean_data, 0)
+        sum_u = np.zeros(size_max)
+        sum_mean_x = np.zeros(size_max)
+        sum_mean_z = np.zeros(size_max)
 
-        sum_mean_x_xT = np.zeros((x_size, x_size))
+        sum_u[:u_size] = np.sum(u_data, 0)
+        sum_mean_x[:x_size] = np.sum(x_mean_data, 0)
+        sum_mean_z[:z_size] = np.sum(z_mean_data, 0)
+
+        sum_mean_x_xT = np.zeros((size_max, size_max))
         for j in range(J):
-            sum_mean_x_xT += (np.outer(x_mean_data[j], x_mean_data[j]) + 
-                              x_z_covar_data[:x_size, :x_size])
+            sum_mean_x_xT[:x_size, :x_size] += (
+                np.outer(x_mean_data[j], x_mean_data[j]) + 
+                x_z_covar_data[j][:x_size, :x_size])
 
-        sum_u_uT = np.zeros((u_size, u_size))
+        sum_u_uT = np.zeros((size_max, size_max))
         for j in range(J):
-            sum_u_uT += np.outer(u_data[j], u_data[j])
+            sum_u_uT[:u_size, :u_size] += np.outer(u_data[j], u_data[j])
 
-        sum_mean_x_zT = np.zeros((x_size, z_size))
+        sum_mean_u_xT = np.zeros((size_max, size_max))
         for j in range(J):
-            sum_mean_x_zT += (np.outer(x_mean_data[j], z_mean_data[j]) + 
-                              x_z_covar_data[:x_size, x_size:])
+            sum_mean_u_xT[:u_size, :x_size] += np.outer(u_data[j], x_mean_data[j])
 
-        sum_mean_u_zT = np.zeros((u_size, z_size))
+        sum_mean_x_zT = np.zeros((size_max, size_max))
         for j in range(J):
-            sum_mean_u_zT += np.outer(u_data[j], z_mean_data[j])
+            sum_mean_x_zT[:x_size, :z_size] += (
+                np.outer(x_mean_data[j], z_mean_data[j]) + 
+                x_z_covar_data[j][:x_size, x_size:])
+
+        sum_mean_u_zT = np.zeros((size_max, size_max))
+        for j in range(J):
+            sum_mean_u_zT[:u_size, :z_size] += np.outer(u_data[j], z_mean_data[j])
+
+        row1 = np.c_[sum_mean_x_xT, sum_mean_u_xT, sum_mean_x]
+        row2 = np.c_[sum_mean_u_xT.T, sum_u_uT, sum_u]
+        row3 = np.r_[sum_mean_x, sum_u, J]
+
+        system = np.r_[row1, row2, row3.reshape((1, len(row3)))]
+
+        rhs = np.r_[
+            sum_mean_x_zT,
+            sum_mean_u_zT,
+            sum_mean_z.reshape((1, size_max))
+        ]
+
+        theta = np.linalg.lstsq(system, rhs)[0]
+        self.A = theta[:x_size, :z_size]
+        self.B = theta[x_size:x_size+u_size, :z_size]
+        self.b = theta[x_size+u_size, :z_size]
+
+
+def make_x_z_covar(x_covar, z_covar):
+    return np.r_[
+        np.c_[x_covar, np.zeros((x_covar.shape[0], z_covar.shape[1]))],
+        np.c_[np.zeros((z_covar.shape[0], x_covar.shape[1])), z_covar]
+    ]
+
+
+def make_x_z_covar_data(x_covars, z_len, precision=10):
+    data = []
+    for R in x_covars:
+        data.append(make_x_z_covar(R, np.eye(z_len)/precision))
+    return data
 
 
 ###
@@ -141,12 +193,14 @@ def train_filter(filt, U, Y):
     """
     n = len(U)
     X = []
+    R = []
     for i in range(n):
         x_hat_bar = filt.time_update(U[i])
         x_hat, P = filt.measurement_update(Y[i], x_hat_bar)
         print(i, x_hat)
         X.append(x_hat)
-    return np.array(X)
+        R.append(P)
+    return np.array(X), R
 
 
 def plot_states(F, U, X_hat, x0=np.array([-0.72, -0.64])):
@@ -176,7 +230,7 @@ def plot_states(F, U, X_hat, x0=np.array([-0.72, -0.64])):
 def test_filter(F, H, dF_dx, dH_dx, x0=np.array([-0.72, -0.64])):
     U, Y, R_v, R_n = generate_timeseries(F, H)
     filt = UKF(F, H, R_v, R_n, x0, np.eye(2)*0.0001)
-    X = train_filter(filt, U, Y)
+    X, R = train_filter(filt, U, Y)
     plot_states(F, U, X)
     plt.show()
 
