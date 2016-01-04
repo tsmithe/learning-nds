@@ -103,6 +103,14 @@ class RBF:
         linear_row2 = np.c_[sum_mean_u_xT.T, sum_u_uT, sum_u]
         linear_row3 = np.r_[sum_mean_x, sum_u, J].reshape((1, len(linear_row3)))
 
+        linear_system = np.r_[linear_row1, linear_row2, linear_row3]
+
+        linear_rhs = np.r_[
+            sum_mean_x_zT,
+            sum_mean_u_zT,
+            sum_mean_z.reshape((1, size_max))
+        ]
+
         #
         # Now compute all the expectations depending on the RBF kernels rho
         #
@@ -113,6 +121,7 @@ class RBF:
                 x_z_precisions.append(np.linalg.inv(x_z_covar_data[j]))
 
         sum_mean_rhos = [0] * self.I
+        sum_mean_u_rhos = [np.zeros(x_size)] * self.I
         sum_mean_x_rhos = [np.zeros(x_size)] * self.I
         sum_mean_z_rhos = [np.zeros(z_size)] * self.I
         sum_mean_rhos_rhos = np.zeros((self.I, self.I))
@@ -135,8 +144,9 @@ class RBF:
                 beta_ij *= np.exp(-0.5 * delta_ij)
 
                 sum_mean_rhos[i] += beta_ij
+                sum_mean_u_rhos[i] += beta_ij * u_data[j]
                 sum_mean_x_rhos[i] += beta_ij * mu_ij[:x_size]
-                sum_mean_z_rhos[j] += beta_ij * mu_ij[:z_size]
+                sum_mean_z_rhos[i] += beta_ij * mu_ij[:z_size]
 
                 for l in range(self.I):
                     C_ilj = x_z_precisions[j].copy()
@@ -165,30 +175,38 @@ class RBF:
         # And use the expectations to compute MLEs for theta and Q
         #
 
-        system, rhs = None, None
-        if self.I == 0:  # Then the system is linear
-            system = np.r_[linear_row1, linear_row2, linear_row3]
+        system_size = self.I+x_size+u_size+1
+        system = np.zeros((system_size, system_size))
+        system[:self.I, :self.I] = sum_mean_rhos_rhos
 
-            rhs = np.r_[
-                sum_mean_x_zT,
-                sum_mean_u_zT,
-                sum_mean_z.reshape((1, size_max))
-            ]
-        else:
-            system_size = self.I+x_size+u_size+1
-            system = np.zeros((system_size, system_size))
-            system[:self.I, :self.I] = sum_mean_rhos_rhos
-            # etc etc
+        for i in range(self.I):
+            system[i, self.I:self.I+x_size] = sum_mean_x_rhos[i]
+            system[self.I:self.I+x_size, i] = sum_mean_x_rhos[i]
 
-            # perhaps do the linear system in this way, and merge the brances..
+            system[i, self.I+x_size:self.I+x_size+u_size] = sum_mean_u_rhos[i]
+            system[self.I+x_size:self.I+x_size+u_size, i] = sum_mean_u_rhos[i]
+
+            system[i, -1] = sum_mean_rhos[i]
+            system[-1, i] = sum_mean_rhos[i]
+
+        system[self.I:, self.I:] = linear_system
+
+        rhs = np.zeros((self.I+linear_rhs.shape[0], z_size))
+        for i in range(self.I):
+            rhs[i] = sum_mean_z_rhos[i]
+        rhs[self.I:] = linear_rhs
 
         # Or perhaps compute the pseudo-inverse with npla.pinv?...
         theta = np.linalg.lstsq(system, rhs)[0]
+
+        for i in range(self.I):
+            self.h[i] = theta[i]
+
         self.A = theta[self.I:self.I+x_size, :z_size]
         self.B = theta[self.I+x_size:self.I+x_size+u_size, :z_size]
         self.b = theta[self.I+x_size+u_size, :z_size]
 
-        # Finally, want Q_hat (the MLE for the noise covariance in z)
+        # TODO: Q_hat (the MLE for the noise covariance in z)
 
 
 def make_x_z_covar(x_covar, z_covar):
