@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from __future__ import division
+from __future__ import division              # For Python 2 users...
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -63,6 +63,10 @@ class RBF:
         z_size = len(z_mean_data[0])
         size_max = max(max(u_size, x_size), z_size)
 
+        #
+        # Compute all the expectations needed for the linear part of the system
+        #
+
         sum_u = np.zeros(size_max)
         sum_mean_x = np.zeros(size_max)
         sum_mean_z = np.zeros(size_max)
@@ -111,6 +115,8 @@ class RBF:
         sum_mean_rhos = [0] * self.I
         sum_mean_x_rhos = [np.zeros(x_size)] * self.I
         sum_mean_z_rhos = [np.zeros(z_size)] * self.I
+        sum_mean_rhos_rhos = np.zeros((self.I, self.I))
+
         for i in range(self.I):
             for j in range(J):
                 C_ij = x_z_precisions[j].copy()
@@ -129,11 +135,35 @@ class RBF:
                 beta_ij *= np.exp(-0.5 * delta_ij)
 
                 sum_mean_rhos[i] += beta_ij
-                # sum_mean_x_rhos
-                # sum_mean_z_rhos
+                sum_mean_x_rhos[i] += beta_ij * mu_ij[:x_size]
+                sum_mean_z_rhos[j] += beta_ij * mu_ij[:z_size]
 
-                # Also need C_ilj, mu_ilj, gamma_ilj; whence sum_mean_rhos_rhos
-                # (which can be a matrix of size I x i)
+                for l in range(self.I):
+                    C_ilj = x_z_precisions[j].copy()
+                    C_ilj[:x_size, :x_size] += self.S_inv[i] + self.S_inv[l]
+                    C_ilj = np.linalg.inv(C_ilj)
+                    mu_ilj = x_z_precisions[j].dot(mu_j)
+                    mu_ilj += np.r_[
+                        self.S_inv[i].dot(self.c[i]), np.zeros(z_size)]
+                    mu_ilj += np.r_[
+                        self.S_inv[l].dot(self.c[l]), np.zeros(z_size)]
+                    mu_ilj = C_ilj.dot(mu_ilj)
+                    gamma_ilj = self.c[i].dot(self.S_inv[i].dot(self.c[i]))
+                    gamma_ilj += self.c[l].dot(self.S_inv[l].dot(self.c[l]))
+                    gamma_ilj += mu_j.dot(x_z_precisions[j].dot(mu_j))
+                    gamma_ilj -= mu_ilj.dot(np.linalg.inv(C_ilj).dot(mu_ilj))
+
+                    mean_rho_rho = pow(2*np.pi, -x_size)
+                    mean_rho_rho *= pow(np.linalg.det(x_z_covar_data[j]), -0.5)
+                    mean_rho_rho *= pow(self.S_det[i], -0.5)
+                    mean_rho_rho *= pow(self.S_det[l], -0.5)
+                    mean_rho_rho *= pow(np.linalg.det(C_ilj), 0.5)
+                    mean_rho_rho *= np.exp(0.5 * gamma_ilj)
+                    sum_mean_rhos_rhos[i, l] += mean_rho_rho
+
+        #
+        # And use the expectations to compute MLEs for theta and Q
+        #
 
         system, rhs = None, None
         if self.I == 0:  # Then the system is linear
@@ -145,7 +175,12 @@ class RBF:
                 sum_mean_z.reshape((1, size_max))
             ]
         else:
-            pass
+            system_size = self.I+x_size+u_size+1
+            system = np.zeros((system_size, system_size))
+            system[:self.I, :self.I] = sum_mean_rhos_rhos
+            # etc etc
+
+            # perhaps do the linear system in this way, and merge the brances..
 
         # Or perhaps compute the pseudo-inverse with npla.pinv?...
         theta = np.linalg.lstsq(system, rhs)[0]
