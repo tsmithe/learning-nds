@@ -6,7 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 class RBF:
-    def __init__(self, u_size, x_size, z_size, I=10): #, means, covariances):
+    def __init__(self, u_size, x_size, z_size):
         """
         self.c[i]
         self.S_det[i]
@@ -17,18 +17,27 @@ class RBF:
         And guesses for:
         self.A, self.B, self.b, self.h[i]
         """
-        self.I = I
+        self.I = 0
         self.size = z_size
-
-        self.h = np.zeros(I)
 
         self.A = np.zeros((z_size, x_size))
         self.B = np.zeros((z_size, u_size))
         self.b = np.zeros(z_size)
 
+    def make_nonlinear(self, c, S):
+        """
+        c is a list of centres of the RBFs; S is a list of their covariances
+        """
+        self.I = len(c)
+        self.h = [np.zeros(self.size)] * self.I  # Initial guess for RBF coeffs
+        self.c = c
+        self.S_det, self.S_inv = [], []
+        for i range(self.I):
+            self.S_det.append(np.linalg.det(S[i]))
+            self.S_inv.append(np.linalg.inv(S[i]))
+
     def rho(self, i, x):
-        return 0
-        return np.sqrt(2*np.pi) * pow(self.S_det[i], -len(x)/2) * np.exp(
+        return pow(2*np.pi, -len(x)/2) * pow(self.S_det[i], -0.5) * np.exp(
             -0.5 * (x - self.c[i]).T.dot(self.S_inv[i]).dot(x - self.c[i]))
 
     def __call__(self, x, u):
@@ -86,22 +95,65 @@ class RBF:
         for j in range(J):
             sum_mean_u_zT[:u_size, :z_size] += np.outer(u_data[j], z_mean_data[j])
 
-        row1 = np.c_[sum_mean_x_xT, sum_mean_u_xT, sum_mean_x]
-        row2 = np.c_[sum_mean_u_xT.T, sum_u_uT, sum_u]
-        row3 = np.r_[sum_mean_x, sum_u, J]
+        linear_row1 = np.c_[sum_mean_x_xT, sum_mean_u_xT, sum_mean_x]
+        linear_row2 = np.c_[sum_mean_u_xT.T, sum_u_uT, sum_u]
+        linear_row3 = np.r_[sum_mean_x, sum_u, J].reshape((1, len(linear_row3)))
 
-        system = np.r_[row1, row2, row3.reshape((1, len(row3)))]
+        #
+        # Now compute all the expectations depending on the RBF kernels rho
+        #
 
-        rhs = np.r_[
-            sum_mean_x_zT,
-            sum_mean_u_zT,
-            sum_mean_z.reshape((1, size_max))
-        ]
+        x_z_precisions = []
+        if self.I > 0:
+            for j in range(J):
+                x_z_precisions.append(np.linalg.inv(x_z_covar_data[j]))
 
+        sum_mean_rhos = [0] * self.I
+        sum_mean_x_rhos = [np.zeros(x_size)] * self.I
+        sum_mean_z_rhos = [np.zeros(z_size)] * self.I
+        for i in range(self.I):
+            for j in range(J):
+                C_ij = x_z_precisions[j].copy()
+                C_ij[:x_size, :x_size] += self.S_inv[i]
+                C_ij = np.linalg.inv(C_ij)
+                delta_ij = self.c[i].dot(self.S_inv[i].dot(self.c[i]))
+                mu_j = np.r_[x_mean_data[j], z_mean_data[j]]
+                mu_ij = x_z_precisions[j].dot(mu_j)
+                mu_ij += np.r_[self.S_inv[i].dot(self.c[i]), np.zeros(z_size)]
+                mu_ij = C_ij.dot(mu_ij)
+                delta_ij += mu_j.dot(x_z_precisions[j].dot(mu_j))
+                delta_ij -= mu_ij.dot(np.linalg.inv(C_ij).dot(mu_ij))
+                beta_ij = pow(2*np.pi, -x_size / 2) * pow(self.S_det[i], -0.5)
+                beta_ij *= pow(np.linalg.det(x_z_covar_data[j]), -0.5)
+                beta_ij *= pow(np.linalg.det(C_ij), 0.5)
+                beta_ij *= np.exp(-0.5 * delta_ij)
+
+                sum_mean_rhos[i] += beta_ij
+                # sum_mean_x_rhos
+                # sum_mean_z_rhos
+
+                # Also need C_ilj, mu_ilj, gamma_ilj; whence sum_mean_rhos_rhos
+                # (which can be a matrix of size I x i)
+
+        system, rhs = None, None
+        if self.I == 0:  # Then the system is linear
+            system = np.r_[linear_row1, linear_row2, linear_row3]
+
+            rhs = np.r_[
+                sum_mean_x_zT,
+                sum_mean_u_zT,
+                sum_mean_z.reshape((1, size_max))
+            ]
+        else:
+            pass
+
+        # Or perhaps compute the pseudo-inverse with npla.pinv?...
         theta = np.linalg.lstsq(system, rhs)[0]
-        self.A = theta[:x_size, :z_size]
-        self.B = theta[x_size:x_size+u_size, :z_size]
-        self.b = theta[x_size+u_size, :z_size]
+        self.A = theta[self.I:self.I+x_size, :z_size]
+        self.B = theta[self.I+x_size:self.I+x_size+u_size, :z_size]
+        self.b = theta[self.I+x_size+u_size, :z_size]
+
+        # Finally, want Q_hat (the MLE for the noise covariance in z)
 
 
 def make_x_z_covar(x_covar, z_covar):
