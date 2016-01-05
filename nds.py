@@ -3,7 +3,11 @@
 from __future__ import division              # For Python 2 users...
 
 import numpy as np
+from scipy import linalg as spla
 import matplotlib.pyplot as plt
+
+from filterpy.kalman import UnscentedKalmanFilter as UKF2
+from filterpy.kalman import MerweScaledSigmaPoints
 
 class RBF:
     def __init__(self, u_size, x_size, z_size):
@@ -20,9 +24,9 @@ class RBF:
         self.I = 0
         self.size = z_size
 
-        self.A = np.zeros((z_size, x_size))
-        self.B = np.zeros((z_size, u_size))
-        self.b = np.zeros(z_size)
+        self.A = np.ones((z_size, x_size))
+        self.B = np.ones((z_size, u_size))
+        self.b = np.ones(z_size)
 
     def make_nonlinear(self, c, S):
         """
@@ -32,7 +36,7 @@ class RBF:
         self.h = [np.zeros(self.size)] * self.I  # Initial guess for RBF coeffs
         self.c = c
         self.S_det, self.S_inv = [], []
-        for i range(self.I):
+        for i in range(self.I):
             self.S_det.append(np.linalg.det(S[i]))
             self.S_inv.append(np.linalg.inv(S[i]))
 
@@ -66,6 +70,8 @@ class RBF:
         #
         # Compute all the expectations needed for the linear part of the system
         #
+
+        print("Computing linear expectations")
 
         sum_u = np.zeros(size_max)
         sum_mean_x = np.zeros(size_max)
@@ -101,7 +107,8 @@ class RBF:
 
         linear_row1 = np.c_[sum_mean_x_xT, sum_mean_u_xT, sum_mean_x]
         linear_row2 = np.c_[sum_mean_u_xT.T, sum_u_uT, sum_u]
-        linear_row3 = np.r_[sum_mean_x, sum_u, J].reshape((1, len(linear_row3)))
+        linear_row3 = np.r_[sum_mean_x, sum_u, J]
+        linear_row3 = linear_row3.reshape((1, len(linear_row3)))
 
         linear_system = np.r_[linear_row1, linear_row2, linear_row3]
 
@@ -114,6 +121,8 @@ class RBF:
         #
         # Now compute all the expectations depending on the RBF kernels rho
         #
+
+        print("Computing nonlinear expectations")
 
         x_z_precisions = []
         if self.I > 0:
@@ -128,6 +137,7 @@ class RBF:
 
         for i in range(self.I):
             for j in range(J):
+                sys.stdout.write("\r  %d, %d" % (i, j))
                 C_ij = x_z_precisions[j].copy()
                 C_ij[:x_size, :x_size] += self.S_inv[i]
                 C_ij = np.linalg.inv(C_ij)
@@ -174,6 +184,8 @@ class RBF:
         #
         # And use the expectations to compute MLEs for theta and Q
         #
+
+        print("\nComputing MLEs for theta and Q")
 
         system_size = self.I+x_size+u_size+1
         system = np.zeros((system_size, system_size))
@@ -272,7 +284,7 @@ def dH_dx(x):
 ### and plot the results
 ###
 
-def generate_timeseries(F=F, H=H, stop=10000, x0=np.array([-0.72, -0.64]),
+def generate_timeseries(F=F, H=H, stop=2000, x0=np.array([-0.72, -0.64]),
                         R_v=np.eye(2)*0, R_n=np.eye(2)*0.001):
     """
     stop is the number of iterations;
@@ -302,10 +314,27 @@ def train_filter(filt, U, Y):
     for i in range(n):
         x_hat_bar = filt.time_update(U[i])
         x_hat, P = filt.measurement_update(Y[i], x_hat_bar)
-        print(i, x_hat)
+        print(i, x_hat, P)
         X.append(x_hat)
         R.append(P)
     return np.array(X), R
+
+
+def train_filter2(filt, U, Y):
+    """
+    filt is your filter class, U the input vector, and Y the output vector.
+    """
+    n = len(U)
+    X, R = [], []
+    for i in range(n):
+        print(i)
+        filt.predict(fx_args=(U[i],))
+        filt.update(Y[i])
+        X.append(filt.x.copy())
+        R.append(filt.P.copy())
+    X = np.array(X)
+    X, R, K = filt.rts_smoother(X, R, fx_args=(U[i],))
+    return X, R
 
 
 def plot_states(F, U, X_hat, x0=np.array([-0.72, -0.64])):
@@ -334,11 +363,43 @@ def plot_states(F, U, X_hat, x0=np.array([-0.72, -0.64])):
 
 def test_filter(F, H, dF_dx, dH_dx, x0=np.array([-0.72, -0.64])):
     U, Y, R_v, R_n = generate_timeseries(F, H)
-    filt = UKF(F, H, R_v, R_n, x0, np.eye(2)*0.0001)
-    X, R = train_filter(filt, U, Y)
+    #filt = UKF(F, H, R_v, R_n, x0, np.eye(2)*0.0001)
+    #X, R = train_filter(filt, U, Y)
+    def fx(x, dt, u):
+        return F(x, u)
+    filt = UKF2(len(x0), len(Y[0]), 1, H, fx, MerweScaledSigmaPoints(2, 1e-3, 2, 1))
+    filt.x = x0
+    X, R = train_filter2(filt, U, Y)
     plot_states(F, U, X)
     plt.show()
 
+
+def test_filter_rbf(F, H, x0=np.array([-0.72, -0.64])):
+    U, Y, R_v, R_n = generate_timeseries(F, H)
+
+    c_x = [-1.25, -0.75, -0.25, 0.25]
+    c_y = [-1.25, -0.75, -0.25, 0.25]
+    c, S = [], []
+    for x in c_x:
+        for y in c_y:
+            c.append(np.array([x, y]))
+            S.append(np.eye(2)*0.5)
+
+    rbf = RBF(len(U[0]), 2, len(Y[0]))
+    rbf.make_nonlinear(c, S)
+
+    while True:
+        # filt = UKF(rbf, H, R_v, R_n, x0, np.eye(2)*0.0001)
+        # X, R = train_filter(filt, U, Y)
+        def fx(x, dt, u):
+            return rbf(x, u)
+        filt = UKF2(len(x0), len(Y[0]), 1, H, fx, MerweScaledSigmaPoints(2, 1e-3, 2, 1))
+        filt.x = x0
+        X, R = train_filter2(filt, U, Y)
+        plot_states(F, U, X)
+        plt.show()
+        covars = make_x_z_covar_data(R, 2)
+        rbf.update(U, X, Y, covars)
 
 ###
 ### Kalman filter classes, using the notation from Ch.7 in Haykin (2004)
@@ -408,7 +469,7 @@ class UKF:
 
     def weights_m(self):
         w = np.ones(2*self.L + 1)
-        w[0] = 0.5
+        w[0] = 0.1
         w[1:] = (1 - w[0]) / (2*self.L)
         return w
 
@@ -418,7 +479,6 @@ class UKF:
     def __init__(self, F, H, R_v, R_n, x_hat_0, P_0, alpha=1.611):
         """
         x_hat_0 and P_0 are initial estimates of the state mean and covariance.
-
 
         alpha determines the spread of sigma points, and should be ~1e-3 or so
          However: currently, small alpha (1.61 or less) makes the
@@ -443,12 +503,15 @@ class UKF:
         # NB: these don't change while we don't augment the sigma points
         self.weights_m = self.weights_m()
         self.weights_c = self.weights_c()
-        print(np.sum(self.weights_m))
+        #print(np.sum(self.weights_m))
 
     def sigma_points(self, x, P):
         # nb: better to *augment* the sigma points at each k, not recompute
         #     but this should work fine
-        sqrt = np.linalg.cholesky(P)
+        sqrt, err = spla.sqrtm(P, disp=False) # spla.cholesky(P)
+        print("!!!", err)
+        if err > 1000:
+            raise Exception("Error too large")
         sqrt *= np.sqrt(self.L / (1-self.weights_m[0])) #np.sqrt(self.L + self.Lambda)
         sigma_points = np.zeros((2*self.L + 1, self.L))
         sigma_points[0, :] = x
@@ -494,11 +557,14 @@ class UKF:
     def measurement_update(self, y, x_hat_bar):
         sigma_points, P_bar, Y, y_hat_bar = self.measurement_params
 
+        print("!!!!!!!!!!!!")
+
         P_yy = np.array(self.R_n)
         for i in range(2*self.L + 1):
             P_yy += self.weights_c[i] * np.outer(
                 Y[i] - y_hat_bar,
                 Y[i] - y_hat_bar)
+        print(P_yy)
 
         P_xy = np.zeros((self.L, self.M))
         for i in range(2*self.L + 1):
@@ -513,6 +579,8 @@ class UKF:
 
         self.x_hat = x_hat
         self.P = P/2 + P.T/2 + np.eye(self.P.shape[0]) * 0.001
+
+        print("!!!!!!!!!!!!")
 
         return x_hat, self.P
 
@@ -548,9 +616,9 @@ class UKF_sqrt:
         self.R_n = R_n
         self.x_hat = x_hat_0
         self.P = P_0
-        self.S = np.linalg.cholesky(P_0)
-        self.sqrt_R_v = np.linalg.cholesky(R_v)
-        self.sqrt_R_n = np.linalg.cholesky(R_n)
+        self.S = spla.sqrtm(P_0) #np.linalg.cholesky(P_0)
+        self.sqrt_R_v = spla.sqrtm(R_v) #np.linalg.cholesky(R_v)
+        self.sqrt_R_n = spla.sqrtm(R_n) #np.linalg.cholesky(R_n)
         self.L = len(x_hat_0)
         self.M = len(H(x_hat_0))
         self.alpha = alpha
